@@ -49,19 +49,60 @@
 
 | 平台 | 真免费？ | 数据会丢吗？ | 需要信用卡？ | 评价 |
 |---|---|---|---|---|
-| **Google Cloud e2-micro** | ✅ **永久免费** | ✅ **30GB 永久磁盘** | ⚠️ 需要（仅验证身份） | 🏆 **最佳选择** |
-| Oracle Cloud 永久免费 | ✅ 永久免费 | ✅ 块存储 | ⚠️ 需要 | 备选，4 核 24G 更强 |
-| 自己的电脑 / NAS | ✅ 免费 | ✅ 本地磁盘 | ❌ 不需要 | 🥇 最省心 |
-| Railway 免费版 | ⚠️ 仅 30 天 | ⚠️ 仅 0.5GB | ❌ 不需要 | 适合先试试 |
-| ~~Netlify~~ | ❌ 跑不了 | ❌ | — | 见上文 |
+| **Silly Development** | ✅ **永久免费** | ✅ 512MB 持久磁盘 | ❌ **不需要** | 🏆 **不绑卡首选** |
+| **Netlify + Silly 混合** | ✅ 永久免费 | ✅ 持久磁盘 | ❌ **不需要** | 🥇 **体验最好** |
+| Bot-Hosting.net | ✅ 免费 | ✅ 512MB 持久磁盘 | ❌ **不需要** | ⚠️ 每 4 天要手动续期 |
+| Google Cloud e2-micro | ✅ 永久免费 | ✅ 30GB 永久磁盘 | ⚠️ **需要** | 最稳，但要绑卡 |
+| 自己的电脑 / NAS | ✅ 免费 | ✅ 本地磁盘 | ❌ 不需要 | 最省心、速度最快 |
+| ~~Netlify（跑服务器）~~ | ❌ 跑不了 | ❌ | — | 但**可以放前端**！见下文 |
 | ~~Render 免费版~~ | ⚠️ | ❌ **会丢** | ❌ | 免费版无持久磁盘 |
+| ~~Railway~~ | ⚠️ 仅 30 天 | ⚠️ 仅 0.5GB | ❌ | 试用性质 |
 | ~~Vercel / Cloudflare Pages~~ | ❌ 跑不了 | ❌ | — | 同为静态托管 |
-
-**结论：想真免费 + 数据不丢，就用 Google Cloud 的永久免费额度（本仓库已自动化）。**
 
 ---
 
-## 🚀 方案一：Google Cloud（永久免费｜推荐）
+## 🚫 不想绑卡？看这里（推荐）
+
+**👉 详细教程：[docs/免绑卡部署.md](docs/免绑卡部署.md)**
+
+### 首选：[Silly Development](https://sillydev.co.uk/) — 完全不需要银行卡
+
+我亲自查阅了它官网和条款，确认：
+
+| 项目 | 免费额度 |
+|---|---|
+| 价格 | **£0，永久免费，不是试用**（原文：not a trial）|
+| 信用卡 | ❌ **不需要** |
+| 内存 / 磁盘 | 256 MB / **512 MB 持久磁盘** |
+| 续期 | ✅ **永不续期**（原文：no renewal button and no expiry timer）|
+| 休眠 | ✅ **永不休眠** |
+| 运行时 | Node.js ✅ |
+
+官方明确支持 SQLite 持久化（原文："stays there across restarts"）。
+
+**两个必须知道的限制**：
+1. ⚠️ **不提供 HTTPS 域名**（原文：we do not provide a domain name or an HTTPS certificate）→ 用免费的 Cloudflare Tunnel 解决
+2. ⚠️ **不提供备份**（原文：it is the only copy there is）→ 需自己定期下载 `/data`
+
+> 需要 HTTPS 域名且能接受**每 4 天手动续期**的话，备选是 [Bot-Hosting.net](https://bot-hosting.net/)（自带 `*.apps.bot-hosting.cloud`）。
+
+### 💡 你的 Netlify 想法是对的 —— 只是放错了位置
+
+```
+❌ Netlify 放整个服务器  → 跑不了（需常驻进程 + 数据库）
+✅ Netlify 放前端网页    → 完美！前端是纯静态文件
+   Silly Development 放后端
+```
+
+而且这是 **reader 官方支持的用法**，源码 `cors.ts` 注释原文：
+
+> "**2. H5 served from somewhere else (a static host, a dev server on :5174)**"
+
+**两边都免费，都不需要绑卡**。完整教程见 👉 [docs/前后端分离方案.md](docs/前后端分离方案.md)
+
+---
+
+## 🚀 方案一：Google Cloud（永久免费｜最稳定，但需绑卡）
 
 > **为什么选它**：Google 的「Always Free」额度包含 **1 台 e2-micro 虚拟机 + 30GB 标准永久磁盘**，**每月都免费、永久有效、不会休眠**。跑 reader 绰绰有余。
 
@@ -353,13 +394,29 @@ sudo systemctl restart reader
 ```
 .
 ├── scripts/
-│   ├── deploy-gcp.sh       # ⭐ Google Cloud 一键部署脚本
+│   ├── deploy-gcp.sh       # ⭐ Google Cloud 一键部署脚本（需绑卡）
+│   ├── build-bundle.sh     # ⭐ 免绑卡方案：构建可上传的部署包
 │   └── cloud-init.yaml     # 虚拟机首次启动自动配置
-├── docker-compose.yml      # 本地/NAS/VPS 部署
+├── docs/
+│   ├── 免绑卡部署.md        # ⭐ 不用信用卡的方案（Silly Development）
+│   ├── 前后端分离方案.md    # ⭐ Netlify 前端 + 免费后端（推荐）
+│   ├── 一键部署教程.md      # Google Cloud 图文教程
+│   ├── 平台对比.md          # 各平台免费方案核实对比
+│   └── 研究原始记录.md      # 平台调研原始数据
+├── docker-compose.yml      # 本地/NAS/VPS 部署（最省心）
 ├── render.yaml             # Render 部署（需付费才有持久磁盘）
 ├── .env.example            # 环境变量模板
 └── README.md
 ```
+
+### 我该选哪个？
+
+| 你的情况 | 推荐方案 |
+|---|---|
+| **不想绑卡** | [免绑卡部署](docs/免绑卡部署.md)（Silly Development）|
+| **不想绑卡 + 想要网页界面** | [前后端分离方案](docs/前后端分离方案.md)（Netlify + Silly）|
+| 有闲置电脑 / NAS | [docker-compose.yml](docker-compose.yml)（最快最省心）|
+| 能绑卡、想要最稳 | [一键部署教程](docs/一键部署教程.md)（Google Cloud）|
 
 ---
 
@@ -368,6 +425,7 @@ sudo systemctl restart reader
 - 感谢 [hectorqin/reader](https://github.com/hectorqin/reader) 提供的优秀开源项目（AGPL-3.0）
 - 本项目仅为**部署脚本与教程**，不含 reader 源码，遵循同样的 AGPL-3.0 协议
 - 请遵守当地法律法规，仅用于个人合法阅读用途
+- 本文档中所有平台的免费政策均于 **2026-10** 核实自官方页面，平台政策可能变化
 
 <div align="center">
 
