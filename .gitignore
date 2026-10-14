@@ -1,0 +1,21 @@
+# 环境变量文件（含密钥，不要提交到 Git）
+.env
+
+# 数据目录（含数据库和密钥，绝对不要提交）
+data/
+books/
+
+# 备份文件
+*.tar.gz
+reader-backup-*
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

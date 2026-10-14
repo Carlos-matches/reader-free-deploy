@@ -1,0 +1,60 @@
+# =============================================================================
+# Render Blueprint —— 一键部署阅读3服务器版
+# =============================================================================
+#
+# ⚠️ 重要警告：Render 的【免费】实例使用临时文件系统！
+#    这意味着每次服务重启、重新部署或休眠后，/data 里的数据（账号、书架、
+#    阅读进度、书签）都会【全部丢失】。免费实例也不支持挂载持久磁盘。
+#
+# 因此本配置默认使用【付费 Starter 实例 + 持久磁盘】，才能真正保存数据。
+# 费用约 $7/月（实例）+ $0.25/GB/月（磁盘）。
+#
+# 如果你只是想【试用】而不在乎数据丢失，可以：
+#   把下面的 plan: starter 改成 plan: free，并删掉整个 disks: 段。
+#
+# 使用方法：
+#   1. 把这个仓库 push 到你的 GitHub
+#   2. 打开 https://dashboard.render.com/blueprints
+#   3. 点 New Blueprint Instance，选择这个仓库
+#   4. Render 会读取本文件自动创建服务
+#
+# =============================================================================
+
+services:
+  - type: web
+    name: reader
+    runtime: image
+    # 固定 commit 标签，避免自动升级引入不兼容变更
+    # 想升级时改成更新的 commit 标签即可
+    image:
+      url: docker.cnb.cool/hectorqin/reader:875fec84
+    # 免费实例数据会丢失，所以这里用 starter
+    plan: starter
+    region: singapore
+    numInstances: 1
+    healthCheckPath: /api/v1/health
+    envVars:
+      # 数据目录 —— 挂载到下面的持久磁盘
+      - key: DATA_DIR
+        value: /data
+      # 书库目录
+      - key: BOOKS_DIR
+        value: /books
+      # Render 会自动注入 PORT，reader 会读取它，无需手动设置
+      # 签名密钥：Render 自动生成并安全保存
+      - key: READER_TOKEN_SECRET
+        generateValue: true
+      # 是否允许注册。首个账号始终可注册并成为管理员
+      - key: ALLOW_REGISTRATION
+        value: "false"
+      # 注册邀请码（想让别人注册就设置这个）
+      - key: INVITE_CODE
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+    disks:
+      # 持久磁盘：保存 SQLite 数据库、封面缓存、上传暂存、密钥
+      # 这就是免费实例做不到的部分
+      - name: reader-data
+        mountPath: /data
+        sizeGB: 1

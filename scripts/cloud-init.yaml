@@ -1,0 +1,202 @@
+#cloud-config
+# ============================================================================
+# 阅读3服务器版 (reader) —— 一键自动部署脚本 (Google Cloud 永久免费 e2-micro)
+# ============================================================================
+# 本文件由 Google Cloud 在虚拟机首次开机时自动执行，无需人工登录。
+# 它会：安装 Docker -> 配置防火墙 -> 启动 reader -> 挂载 30GB 永久磁盘到 /data
+#
+# 你需要修改的只有下面 3 个变量（或由 deploy 脚本自动替换）。
+# ============================================================================
+
+write_files:
+  # ---------------------------------------------------------------------------
+  # reader 的环境变量。密码和密钥在这里配置。
+  # ---------------------------------------------------------------------------
+  - path: /opt/reader/.env
+    permissions: '0640'
+    owner: root:root
+    content: |
+      # === 必填：阅读服务器的管理密钥（至少 16 位随机字符）===
+      # 这是你登录管理后台的凭证，请务必改成自己的随机字符串！
+      READER_TOKEN_SECRET=__TOKEN_SECRET__
+
+      # === 选填：注册邀请码。留空则任何人都不能注册 ===
+      # 首个注册的账号自动成为管理员，建议先自己想好。
+      # 如果你想让家人朋友也能注册，把他们需要输入的邀请码填在这里。
+      INVITE_CODE=__INVITE_CODE__
+
+      # === 选填：是否允许公开注册（true / false）===
+      # 首个管理员账号创建后，建议保持 false。
+      ALLOW_REGISTRATION=__ALLOW_REGISTRATION__
+
+      # === 以下一般不需要改 ===
+      # 数据目录（挂载到永久磁盘，重启不丢数据）
+      DATA_DIR=/data
+      # 书库目录（由你通过网盘/OPDS/上传放书）
+      BOOKS_DIR=/books
+      # 容器内部监听端口
+      PORT=5888
+      # 日志级别
+      LOG_LEVEL=info
+
+  # ---------------------------------------------------------------------------
+  # systemd 服务：声明式管理 reader 容器，开机自启，崩溃自动重启
+  # ---------------------------------------------------------------------------
+  - path: /etc/systemd/system/reader.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Reader (阅读3服务器版) - self-hosted book server
+      After=docker.service network-online.target
+      Wants=network-online.target
+      Requires=docker.service
+
+      [Service]
+      TimeoutStartSec=0
+      Restart=always
+      RestartSec=10
+
+      # 先清理可能残留的同名容器，保证幂等
+      ExecStartPre=-/usr/bin/docker rm -f reader
+
+      # 首次启动时拉取镜像；--pull always 保证用最新版本
+      ExecStartPre=/usr/bin/docker pull __IMAGE__
+
+      ExecStart=/usr/bin/docker run --rm --name reader \
+        --env-file /opt/reader/.env \
+        -p 80:5888 \
+        -v /data:/data \
+        -v /books:/books \
+        __IMAGE__
+
+      ExecStop=/usr/bin/docker stop reader
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ---------------------------------------------------------------------------
+  # 磁盘初始化脚本：把 30GB 永久磁盘格式化并挂载到 /data
+  # ---------------------------------------------------------------------------
+  - path: /opt/reader/setup-disk.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # 把 Google Cloud 附加的永久磁盘挂到 /data，只执行一次。
+      set -euo pipefail
+
+      DISK_DEV="${DISK_DEV:-/dev/disk/by-id/google-reader-data}"
+
+      # 磁盘还没挂载？(mountpoint 返回非 0 表示未挂载)
+      if mountpoint -q /data; then
+        echo "[disk] /data 已挂载，跳过"
+        exit 0
+      fi
+
+      # 等待磁盘设备出现（最多等 60 秒）
+      for i in $(seq 1 30); do
+        [ -e "$DISK_DEV" ] && break
+        echo "[disk] 等待磁盘设备 $DISK_DEV ... ($i/30)"
+        sleep 2
+      done
+
+      if [ ! -e "$DISK_DEV" ]; then
+        echo "[disk] 警告：找不到磁盘 $DISK_DEV，跳过挂载"
+        mkdir -p /data
+        exit 0
+      fi
+
+      # 如果磁盘还没有文件系统，则格式化为 ext4
+      if ! blkid "$DISK_DEV" >/dev/null 2>&1; then
+        echo "[disk] 磁盘未格式化，正在创建 ext4 文件系统 ..."
+        mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$DISK_DEV"
+      fi
+
+      mkdir -p /data
+      # 用 UUID 挂载，比设备名更稳定
+      DISK_UUID="$(blkid -s UUID -o value "$DISK_DEV")"
+      if ! grep -q "$DISK_UUID" /etc/fstab 2>/dev/null; then
+        echo "UUID=$DISK_UUID /data ext4 discard,defaults,nofail 0 2" >> /etc/fstab
+      fi
+      mount -a
+      echo "[disk] 已挂载 $DISK_DEV -> /data"
+      df -h /data
+
+  # ---------------------------------------------------------------------------
+  # 首次启动引导：安装 docker、swap、ufw 防火墙
+  # ---------------------------------------------------------------------------
+  - path: /opt/reader/bootstrap.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      exec > >(tee -a /var/log/reader-bootstrap.log) 2>&1
+      echo "===== $(date -Is) reader bootstrap 开始 ====="
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      # --- 1. 系统更新与基础工具 ---
+      apt-get update -y
+      apt-get install -y ca-certificates curl gnupg jq ufw
+
+      # --- 2. 安装 Docker（官方仓库）---
+      if ! command -v docker >/dev/null 2>&1; then
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/debian/gpg \
+          | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+        # 注意：用变量拼接避免折行导致 YAML 缩进问题
+        ARCH="$(dpkg --print-architecture)"
+        CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+        echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian ${CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+        apt-get update -y
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+      fi
+      systemctl enable --now docker
+
+      # --- 3. 加 2GB swap（e2-micro 只有 1GB 内存，扫描大书库时防 OOM）---
+      if [ ! -f /swapfile ]; then
+        fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+      # 降低 swap 倾向，但保留应急能力
+      sysctl -w vm.swappiness=10
+      grep -q 'vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+
+      # --- 4. 挂载数据盘 ---
+      /opt/reader/setup-disk.sh
+
+      # --- 5. 准备书库目录 ---
+      mkdir -p /books /data
+      chmod 755 /books /data
+
+      # --- 6. 防火墙：只开放 80（HTTP）和 22（SSH）---
+      ufw --force reset >/dev/null 2>&1 || true
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow 22/tcp   comment 'SSH'
+      ufw allow 80/tcp   comment 'Reader HTTP'
+      ufw --force enable
+
+      # --- 7. 启动 reader 服务 ---
+      systemctl daemon-reload
+      systemctl enable reader.service
+      systemctl restart reader.service
+
+      echo "===== $(date -Is) reader bootstrap 完成 ====="
+      echo "访问 http://<本机公网IP>/ 开始使用"
+      echo "健康检查： curl -s localhost/api/v1/health"
+
+# ---------------------------------------------------------------------------
+# cloud-init 主流程：只在首次开机执行一次
+# ---------------------------------------------------------------------------
+runcmd:
+  - [ bash, -lc, "/opt/reader/bootstrap.sh" ]
+
+# 确保 cloud-init 在每次启动时都重试挂载（幂等）
+bootcmd:
+  - [ bash, -lc, "test -x /opt/reader/setup-disk.sh && /opt/reader/setup-disk.sh || true" ]
+
+final_message: "reader 部署完成，耗时 $UPTIME 秒。请打开 http://<公网IP>/ 注册第一个管理员账号。"
