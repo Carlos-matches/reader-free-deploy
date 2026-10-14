@@ -1,0 +1,29 @@
+# 统一使用 LF 换行符 —— 这对 shell 脚本和 cloud-init 至关重要！
+#
+# 如果 .sh / .yaml 文件被 Windows 的 CRLF 换行符污染，
+# Linux 上的 bash 会报错： /bin/bash^M: bad interpreter
+# cloud-init 也可能解析失败。
+#
+# 下面的规则强制这些文件在仓库中始终保存为 LF。
+
+# 默认：让 Git 自动处理，但仓库内始终存 LF
+* text=auto eol=lf
+
+# 明确强制 LF 的文件类型
+*.sh      text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.md      text eol=lf
+Dockerfile text eol=lf
+
+# 二进制文件不做任何转换
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.epub    binary
+*.zip     binary
+*.gz      binary
+*.tar     binary
