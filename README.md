@@ -8,6 +8,9 @@
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](#-方案三自己的电脑nasvps最省心)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=for-the-badge)](LICENSE)
 
+> 💡 **只想部署纯静态阅读器（不需要服务器）？**
+> 见姊妹项目 👉 [reader-static](https://github.com/Carlos-matches/reader-static)
+
 </div>
 
 ---
