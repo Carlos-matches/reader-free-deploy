@@ -20,8 +20,13 @@ REPO="${REPO:-https://github.com/hectorqin/reader.git}"
 # 固定 commit，保证版本可复现（与 Docker 方案一致）
 # 想升级时改成新的 commit sha
 COMMIT="${COMMIT:-875fec84ddff0f76ab55d495cc428c658b80aeab}"
-WORKDIR="${WORKDIR:-./build}"
-OUT="${OUT:-./reader-bundle.zip}"
+
+# 所有路径都基于本脚本所在目录，这样无论从哪里调用都能正确输出
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+WORKDIR="${WORKDIR:-$PROJECT_DIR/.build}"
+OUT="${OUT:-$PROJECT_DIR/reader-bundle.zip}"
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[0;33m'; BLU=$'\033[0;34m'; NC=$'\033[0m'
 info(){ echo "${BLU}[信息]${NC} $*"; }
@@ -51,10 +56,48 @@ echo
 info "步骤 1/5：拉取源码..."
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
-git clone --quiet "$REPO" "$WORKDIR/reader"
+
+# 优先用 git；某些网络环境会拦截 git 协议，
+# 这时自动回退到 HTTPS 压缩包下载（更不容易被拦）。
+SRC_OK=0
+
+for attempt in 1 2 3; do
+  if git clone --quiet --depth 50 "$REPO" "$WORKDIR/reader" 2>/dev/null; then
+    SRC_OK=1
+    break
+  fi
+  warn "git 克隆失败（第 $attempt 次），5 秒后重试..."
+  rm -rf "$WORKDIR/reader"
+  sleep 5
+done
+
+if [ "$SRC_OK" -ne 1 ]; then
+  warn "git 克隆不可用，改用源码压缩包下载..."
+  # 把 https://github.com/owner/repo.git 转成 tarball 地址
+  SLUG="$(printf '%s' "$REPO" | sed -e 's|^https://github.com/||' -e 's|\.git$||')"
+  TARBALL="https://codeload.github.com/${SLUG}/tar.gz/${COMMIT}"
+  mkdir -p "$WORKDIR/reader"
+  for attempt in 1 2 3; do
+    if curl -fsSL "$TARBALL" -o "$WORKDIR/src.tar.gz" 2>/dev/null; then
+      tar -xzf "$WORKDIR/src.tar.gz" -C "$WORKDIR/reader" --strip-components=1
+      SRC_OK=1
+      break
+    fi
+    warn "下载失败（第 $attempt 次），5 秒后重试..."
+    sleep 5
+  done
+fi
+
+[ "$SRC_OK" -eq 1 ] || die "无法获取源码。请检查网络，或设置代理后重试：
+    export https_proxy=http://127.0.0.1:7890
+    export http_proxy=http://127.0.0.1:7890"
+
 cd "$WORKDIR/reader"
-git checkout --quiet "$COMMIT" 2>/dev/null || warn "无法切换到 $COMMIT，改用默认分支"
-ok "源码就绪（$(git rev-parse --short HEAD)）"
+# 如果是 git 克隆，按 commit 取件；tarball 方式本就是该 commit
+if [ -d .git ]; then
+  git checkout --quiet "$COMMIT" 2>/dev/null || warn "无法切换到 $COMMIT（浅克隆可能未包含），改用当前分支"
+fi
+ok "源码就绪（${COMMIT:0:8}）"
 
 # ---------------------------- 2. 编译服务端 ----------------------------------
 info "步骤 2/5：编译服务端（TypeScript → JavaScript）..."
@@ -74,15 +117,15 @@ info "步骤 3/5：裁剪为生产依赖（减小体积，适配 512MB 空间）
 npm prune --omit=dev --silent
 ok "已裁剪 devDependencies"
 
-cd ..
-# 记录版本，便于排查
-printf '%s\n' "$(git rev-parse HEAD)" > VERSION.txt
+cd "$WORKDIR/reader"
+# 记录版本，便于排查（tarball 方式没有 .git，直接用已知 commit）
+printf '%s\n' "$COMMIT" > VERSION.txt
 
 # ---------------------------- 4. 打包 ----------------------------------------
 info "步骤 4/5：打包..."
 # 只打包运行必需的文件：dist + node_modules + package.json
 # 不含 src/test/tools，节省空间
-STAGE="../stage"
+STAGE="$WORKDIR/stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
@@ -110,26 +153,27 @@ cat > "$STAGE/README-部署说明.txt" <<'EOF'
 【重要】
   1. Web 界面（H5）不包含在本包内。服务端会正常提供 /api 接口，
      但用浏览器直接打开根路径看不到界面。
-     要完整界面请看 README 的「前端部署」说明（可托管到 Netlify 等静态平台）。
-  2. 主机只有 256MB 内存，建议不要启用影音扫描。
-  3. 免费套餐需要每 4 天手动续期一次，否则服务会被删除。
+     要完整界面请看 docs/前后端分离方案.md（前端可托管到 Netlify）。
+  2. 主机只有 256MB 内存。实测本服务端占用约 100~115MB，
+     余量充足，但请勿启用影音/媒体库功能（需要 ffmpeg，会超内存）。
+  3. 请定期备份 data/ 目录（免费主机不提供备份）。
 
 【启动命令】
   node dist/main.js
 EOF
 
 cd "$STAGE"
-rm -f "../$OUT" 2>/dev/null || true
+rm -f "$OUT" 2>/dev/null || true
 
 if command -v zip >/dev/null 2>&1; then
-  zip -qr "../$OUT" . -x "*.map"
+  zip -qr "$OUT" . -x "*.map"
 else
-  # Windows 回退方案
-  powershell -NoProfile -Command "Compress-Archive -Path * -DestinationPath '../$OUT' -Force"
+  # Windows 回退方案（把 bash 路径转成 Windows 路径给 PowerShell）
+  OUT_WIN="$(cygpath -w "$OUT" 2>/dev/null || echo "$OUT")"
+  powershell -NoProfile -Command "Compress-Archive -Path * -DestinationPath '$OUT_WIN' -Force"
 fi
 
-cd ../..
-[ -f "$OUT" ] || die "打包失败"
+[ -f "$OUT" ] || die "打包失败：未生成 $OUT"
 
 SIZE="$(du -h "$OUT" 2>/dev/null | cut -f1 || echo '未知')"
 ok "打包完成：$OUT（$SIZE）"
@@ -142,13 +186,14 @@ echo "=============================================================="
 echo
 echo "  产物：$OUT"
 echo
-echo "接下来的步骤："
-echo "  1. 到 https://bot-hosting.net/ 用 GitHub 或 Discord 登录（不需要银行卡）"
-echo "  2. 创建 Deployment，运行时选择 Node.js"
-echo "  3. 用面板的 File Manager 或 SFTP 上传并解压本压缩包"
-echo "  4. 在 Startup 里把启动文件设为： dist/main.js"
+echo "接下来的步骤（详见 docs/免绑卡部署.md）："
+echo "  1. 到 https://sillydev.co.uk/ 注册（不需要银行卡）"
+echo "  2. Create server → 运行时选 Node.js"
+echo "  3. 用 File Manager 或 SFTP 上传并解压本压缩包"
+echo "  4. Startup 里把启动文件设为： dist/main.js"
 echo "  5. 添加环境变量（见压缩包内 README-部署说明.txt）"
-echo "  6. 启动，然后在 Ports 里查看分配给你的网址"
+echo "  6. 启动，然后在面板 Ports 里查看分配给你的网址"
 echo
-warn "注意：免费套餐需每 4 天手动续期一次。"
+echo "  提示：Silly Development 永不需续期。"
+echo "        若改用 Bot-Hosting.net（自带 HTTPS 域名），则需每 4 天手动续期。"
 echo
